@@ -220,6 +220,9 @@ enum Cmd {
     #[command(subcommand)]
     Schedule(ScheduleCmd),
 
+    /// Install the skill that teaches an AI assistant to use fenders
+    #[command(subcommand)]
+    Skill(cmd::skill::SkillCmd),
     /// Make an authenticated request to any API endpoint
     Api(cmd::api::ApiArgs),
     /// Update fenders to the latest release
@@ -303,6 +306,9 @@ fn run(cli: Cli) -> Result<()> {
     if let Cmd::Profile(c) = command {
         return cmd::profile::run(cfg, &output::Out::new(format), c, g.verbose);
     }
+    if let Cmd::Skill(c) = command {
+        return cmd::skill::run(&output::Out::new(format), c);
+    }
     cfg.activate(g.profile.as_deref())?;
     let conn = cmd::profile::connect(&cfg, g.api_url.as_deref(), g.ca_cert.as_deref(), g.verbose)?;
     let mut app = app::App::new(
@@ -345,7 +351,9 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::HttpsAccess(c) => project::https(&mut app, c),
         Cmd::Schedule(c) => project::schedule(&mut app, c),
         Cmd::Api(a) => api::run(&mut app, a),
-        Cmd::Completion { .. } | Cmd::Update(_) | Cmd::Profile(_) => unreachable!(),
+        Cmd::Completion { .. } | Cmd::Update(_) | Cmd::Profile(_) | Cmd::Skill(_) => {
+            unreachable!()
+        }
     }
 }
 

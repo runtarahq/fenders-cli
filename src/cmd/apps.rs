@@ -641,13 +641,40 @@ pub fn run(app: &mut App, args: RunArgs) -> Result<()> {
     let op = app
         .client
         .post(&format!("{p}/runs"), json!({ "source": source }))?;
-    let Some(done) = app.finish_op(op, &format!("Run {}", args.app), &args.wait)? else {
-        return Ok(());
+    let started_id = op
+        .get("resource_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let done = match app.finish_op(op, &format!("Run {}", args.app), &args.wait) {
+        Ok(Some(done)) => done,
+        Ok(None) => return Ok(()),
+        // A run that failed is still a run: show it (its exit code, why it
+        // ended, its output with --logs) before failing, so a script gets
+        // the record as well as the non-zero exit status.
+        Err(e) => {
+            let Some(rid) = started_id else {
+                return Err(e);
+            };
+            if let Ok(rec) = app.client.get(&format!("{p}/runs/{}", seg(&rid)), &[]) {
+                app.out.record(&rec);
+                if args.logs {
+                    if !app.out.json {
+                        println!();
+                    }
+                    let _ = super::logs::print_for_run(app, &p, &rid);
+                }
+            }
+            return Err(e.context(format!(
+                "run {rid} — its output: fenders logs {} --run {rid}",
+                args.app
+            )));
+        }
     };
     let run_id = done
         .get("resource_id")
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(str::to_string)
+        .or(started_id);
     match &run_id {
         Some(rid) => {
             let rec = app.client.get(&format!("{p}/runs/{}", seg(rid)), &[])?;

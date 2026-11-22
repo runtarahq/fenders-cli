@@ -628,6 +628,43 @@ control plane logged.
 
 `-v` logs every HTTP request to stderr.
 
+## AI assistants
+
+`fenders skill install` installs an [Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview)
+that teaches an AI assistant (Claude Code, or any agent that reads skills) to use this CLI: to
+build and deploy `.wasm` web apps, and to run code it does not trust in a Fenders sandbox,
+either through a runner app (a JS or Python interpreter deployed as an HTTP app) or built as a
+command and run once.
+
+```console
+$ fenders skill install                                 # ~/.claude/skills/fenders, for every project
+$ fenders skill install --dir .claude/skills/fenders    # or for one project
+$ fenders skill show reference/sandbox.md               # read any of its files
+```
+
+The skill is built into the binary, so it always matches the installed version's commands;
+run `skill install --force` after `fenders update` to refresh a copy you edited. It holds:
+
+- `SKILL.md`: when to use Fenders, the checks to make first, rules (a tenant profile, never the
+  operator's; `--no-input -o json`; secrets only on stdin), and the deploy and run workflows.
+- `reference/`: building components and calling HTTP apps, running untrusted code and what is
+  isolated (measured: no network, no files, a fresh instance per request, memory by size, a
+  CPU budget per run), the commands with the JSON they return, and every error code.
+- `templates/`: a Rust HTTP handler and a Rust command that build into components Fenders runs.
+
+Give the assistant its own tenant key, not the operator's:
+
+```console
+$ fenders keys issue acme --permissions read,apps:write,runs:write --ttl 1d --label agent --save-profile agent
+$ fenders profile use agent
+```
+
+Tested by giving the skill to Claude Code and asking it to build and deploy a JSON web app
+(it did, from the template, and called it), to run untrusted Rust in a sandbox (it did, read
+the output, and deleted the app), and to run JavaScript with no runner deployed (it stopped and
+asked for the runner's `.wasm` instead of inventing one). The tests in `src/cmd/skill.rs` hold
+the skill's every `fenders …` command to what the binary accepts.
+
 ## Commands
 
 | Area | Commands |
@@ -640,6 +677,7 @@ control plane logged.
 | App history | `versions …`, `releases …`, `runs list \| get \| create \| cancel`, `events APP`, `triggers get \| set` |
 | Project | `projects list \| create \| rename \| delete`, `artifacts list \| get \| inspect \| upload \| delete`, `connections list \| get \| create https\|tcp \| revoke`, `secrets list \| get \| create \| set \| delete`, `ops list \| get \| wait`, `usage`, `sizes`, `https-access show \| validate`, `schedule preview` |
 | Anything else | `api PATH [-X METHOD] [-d JSON\|@file]` with `{workspace}`/`{project}` placeholders |
+| AI assistants | `skill install [--dir DIR] [--force]`, `skill show [FILE]`, `skill files` |
 | Shell | `completion bash\|zsh\|fish\|powershell\|elvish`, `update [--check]` |
 
 Run `fenders <command> --help` for flags and examples. Operator commands need an operator
@@ -721,6 +759,7 @@ src/
   ui.rs          brand palette, banner, spinners, prompts theme, output sanitising
   auth.rs        credential storage per profile (keychain or 0600 file)
   config.rs      profiles (URL, CA, role, workspace/project) in config.toml
-  cmd/           one module per command group (profile.rs, operator.rs, …)
+  cmd/           one module per command group (profile.rs, operator.rs, skill.rs, …)
+skills/fenders/  the agent skill `fenders skill install` writes (built into the binary)
 install.sh       installer / updater / uninstaller for macOS and Linux
 ```

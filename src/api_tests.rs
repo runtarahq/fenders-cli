@@ -522,6 +522,50 @@ mod starting_apps {
     }
 
     #[test]
+    fn a_failed_run_is_shown_and_still_fails() {
+        use crate::cmd::apps::{RunArgs, RunSource, run};
+        let server = MockServer::start();
+        draft_app(&server);
+        let rid = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{}/apps/{APP}/runs", proj()));
+            then.status(202).json_body(
+                json!({"id": OP, "kind": "run-app", "resource_id": rid, "state": "pending"}),
+            );
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("{}/operations/{OP}", proj()));
+            then.status(200)
+                .json_body(json!({"id": OP, "kind": "run-app", "resource_id": rid,
+                "state": "failed", "error": "command-failed-or-cancelled"}));
+        });
+        let record = server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("{}/apps/{APP}/runs/{rid}", proj()));
+            then.status(200)
+                .json_body(json!({"id": rid, "state": "failed", "exit_code": 1,
+                "reason": "execution-failed"}));
+        });
+        let mut a = app(&server);
+        let err = run(
+            &mut a,
+            RunArgs {
+                app: APP.into(),
+                source: RunSource::Manual,
+                logs: false,
+                wait: wait(),
+            },
+        )
+        .unwrap_err();
+        record.assert();
+        assert!(
+            format!("{err:#}").contains(rid),
+            "the error names the run: {err:#}"
+        );
+    }
+
+    #[test]
     fn delete_sends_the_apps_revision_in_the_query() {
         let server = MockServer::start();
         draft_app(&server);

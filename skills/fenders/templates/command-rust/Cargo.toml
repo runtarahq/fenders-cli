@@ -1,0 +1,18 @@
+[package]
+name = "fenders-command"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own workspace, so it builds wherever it is copied.
+[workspace]
+
+[[bin]]
+name = "fenders-command"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

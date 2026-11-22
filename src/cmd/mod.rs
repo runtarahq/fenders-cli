@@ -6,6 +6,7 @@ pub mod operator;
 pub mod profile;
 pub mod project;
 pub mod session;
+pub mod skill;
 pub mod update;
 
 use std::io::{IsTerminal, Read};
