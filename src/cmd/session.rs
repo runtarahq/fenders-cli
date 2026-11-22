@@ -11,17 +11,17 @@ use crate::ui::{self, To};
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCmd {
-    /// Log in with a workspace API key
+    /// Replace the current profile's credential (to add a profile, use `fenders profile add`)
     Login {
-        /// Read the API key from stdin instead of prompting
+        /// Read the credential from stdin instead of prompting
         #[arg(long)]
         with_token: bool,
     },
-    /// Forget the stored API key
+    /// Forget the current profile's stored credential
     Logout,
-    /// Show the current identity and where the key comes from
+    /// Show the current identity and where the credential comes from
     Status,
-    /// Print the API key (for use in scripts)
+    /// Print the credential (for use in scripts)
     Token,
 }
 
@@ -41,24 +41,33 @@ fn identity(me: &Value) -> String {
         .unwrap_or_else(|| "API key".into())
 }
 
+/// The active profile's name, for commands that act on its credential.
+fn profile_name(app: &App) -> Result<String> {
+    app.cfg
+        .active
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no profile selected — add one with `fenders profile add`"))
+}
+
 pub fn auth(app: &mut App, cmd: AuthCmd) -> Result<()> {
     match cmd {
         AuthCmd::Login { with_token } => login(app, with_token),
         AuthCmd::Logout => {
-            if auth::clear(&app.api_url)? {
-                ui::success(&format!("Logged out of {}", app.api_url));
+            let name = profile_name(app)?;
+            if auth::clear(&name)? {
+                ui::success(&format!("Forgot the credential of profile {name}"));
             } else {
-                ui::info("No stored API key to remove.");
+                ui::info("No stored credential to remove.");
             }
-            if std::env::var_os("FENDERS_API_KEY").is_some() {
+            if auth::env_token().is_some() {
                 ui::warn(
-                    "FENDERS_API_KEY is still set in your environment and will keep being used.",
+                    "FENDERS_TOKEN is still set in your environment and will keep being used.",
                 );
             }
             Ok(())
         }
         AuthCmd::Status => {
-            let Some((token, source)) = auth::token(&app.api_url) else {
+            let Some((token, source)) = auth::token(app.cfg.active.as_deref()) else {
                 bail!(ApiError {
                     status: 401,
                     code: "not_logged_in".into(),
@@ -69,6 +78,7 @@ pub fn auth(app: &mut App, cmd: AuthCmd) -> Result<()> {
             let me = app.me()?;
             if app.out.json {
                 app.out.print_json(&json!({
+                    "profile": app.cfg.active,
                     "api_url": app.api_url,
                     "source": source.to_string(),
                     "identity": me,
@@ -85,12 +95,12 @@ pub fn auth(app: &mut App, cmd: AuthCmd) -> Result<()> {
             app.out.record(&me);
             Ok(())
         }
-        AuthCmd::Token => match auth::token(&app.api_url) {
+        AuthCmd::Token => match auth::token(app.cfg.active.as_deref()) {
             Some((t, _)) => {
                 println!("{t}");
                 Ok(())
             }
-            None => bail!("not logged in — run `fenders auth login`"),
+            None => bail!("no credential — add a profile with `fenders profile add`"),
         },
     }
 }
@@ -101,54 +111,63 @@ fn mask(t: &str) -> String {
 }
 
 fn login(app: &mut App, with_token: bool) -> Result<()> {
-    let key = if with_token {
+    let name = profile_name(app)?;
+    let key = if with_token || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         let mut s = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
         s.trim().to_string()
     } else {
         if !ui::interactive() {
-            bail!(
-                "no terminal to prompt on — pipe the key in with `--with-token`, or set FENDERS_API_KEY"
-            );
+            bail!("no terminal to prompt on — pipe the credential in with `--with-token`");
         }
-        eprint!("{}", ui::banner());
-        eprintln!();
-        ui::hint("Create an API key in the Fenders console: Settings → API keys.");
-        crate::cmd::read_secret("API key", false)?
+        crate::cmd::read_secret("Operator token or API key", false)?
             .trim()
             .to_string()
     };
     if key.is_empty() {
-        bail!("no API key given");
+        bail!("no credential given");
     }
 
-    let client = Client::new(&app.api_url, Some(key.clone()), false)?;
-    let pb = ui::spinner("Checking key");
-    let me = client.get("/me", &[]);
+    let ca = match &app.cfg.profile().ca_cert {
+        Some(p) => Some(std::fs::read(p)?),
+        None => None,
+    };
+    let client = Client::with_ca(&app.api_url, Some(key.clone()), ca.as_deref(), false)?;
+    let pb = ui::spinner("Checking the credential");
+    let id = crate::cmd::profile::identify(&client);
     pb.finish_and_clear();
-    let me = match me {
-        Ok(m) => m,
+    let id = match id {
+        Ok(i) => i,
         Err(e) => match e.downcast_ref::<ApiError>() {
-            Some(api) if api.status == 401 => bail!("that API key was rejected by {}", app.api_url),
+            Some(api) if api.status == 401 => bail!("{} rejected that credential", app.api_url),
             _ => return Err(e),
         },
     };
-    let source = auth::store(&app.api_url, &key)?;
+    let fresh = crate::cmd::profile::profile_for(
+        &client,
+        &app.api_url,
+        app.cfg.profile().ca_cert.clone(),
+        &id,
+    );
+    let p = app.cfg.profile_mut();
+    if p.role != fresh.role || fresh.workspace.is_some() {
+        // Another kind of credential, or another tenant's: start from what it opens.
+        let api_url = std::mem::take(&mut p.api_url);
+        *p = fresh;
+        p.api_url = api_url;
+    }
+    let source = auth::store(&name, &key)?;
+    app.cfg.save()?;
     ui::success(&format!(
-        "Logged in as {} {}",
-        ui::accent(&identity(&me), To::Err),
-        ui::dim(&format!("(key saved in the {source})"), To::Err)
+        "Profile {} now uses {} {}",
+        ui::accent(&name, To::Err),
+        crate::cmd::profile::describe(&id),
+        ui::dim(&format!("(credential in the {source})"), To::Err)
     ));
-    if std::env::var_os("FENDERS_API_KEY").is_some() {
-        ui::warn("FENDERS_API_KEY is set and takes precedence over the saved key.");
+    if auth::env_token().is_some() {
+        ui::warn("FENDERS_TOKEN is set and takes precedence over the saved credential.");
     }
-
     app.client = client;
-    if app.cfg.workspace.is_none() && ui::interactive() {
-        choose(app, None)?;
-    } else if app.cfg.workspace.is_none() {
-        ui::hint("Next: pick a workspace and project with `fenders use`.");
-    }
     Ok(())
 }
 
@@ -184,7 +203,7 @@ fn choose(app: &mut App, target: Option<&str>) -> Result<()> {
     if let Some((id, name)) = &proj {
         app.cfg.set_project(id.clone(), name.clone());
     }
-    app.cfg.save()?;
+    app.cfg.save_active()?;
     let show = |name: &Option<String>, id: &str| name.clone().unwrap_or_else(|| id.to_string());
     let mut msg = format!(
         "Now using workspace {}",
@@ -201,7 +220,7 @@ fn choose(app: &mut App, target: Option<&str>) -> Result<()> {
 }
 
 pub fn context(app: &mut App) -> Result<()> {
-    let source = auth::token(&app.api_url).map(|(_, s)| s.to_string());
+    let source = auth::token(app.cfg.active.as_deref()).map(|(_, s)| s.to_string());
     let (ws, proj) = app.effective_context();
     let as_json = |c: &Option<(String, Option<String>, bool)>| match c {
         Some((id, name, overridden)) => json!({
@@ -213,6 +232,8 @@ pub fn context(app: &mut App) -> Result<()> {
     };
     if app.out.json {
         app.out.print_json(&json!({
+            "profile": app.cfg.active,
+            "role": app.cfg.profile().role.map(|r| r.to_string()),
             "api_url": app.api_url,
             "workspace": as_json(&ws),
             "project": as_json(&proj),
@@ -235,10 +256,22 @@ pub fn context(app: &mut App) -> Result<()> {
         }
         None => ui::dim("not set — run `fenders use`", To::Out),
     };
+    row(
+        "profile",
+        match (&app.cfg.active, app.cfg.profile().role) {
+            (Some(n), Some(r)) => format!(
+                "{} {}",
+                ui::bold(n, To::Out),
+                ui::dim(&format!("({r})"), To::Out)
+            ),
+            (Some(n), None) => ui::bold(n, To::Out),
+            (None, _) => ui::dim("none — run `fenders profile add`", To::Out),
+        },
+    );
     row("api", app.api_url.clone());
     row(
         "auth",
-        source.unwrap_or_else(|| ui::dim("not logged in — run `fenders auth login`", To::Out)),
+        source.unwrap_or_else(|| ui::dim("no credential — run `fenders profile add`", To::Out)),
     );
     row("workspace", named(&ws));
     row("project", named(&proj));

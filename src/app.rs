@@ -145,12 +145,12 @@ impl App {
         }
         let id = if let Some(f) = self.ws_flag.clone() {
             self.resolve_workspace(&f)?.0
-        } else if let Some(w) = self.cfg.workspace.clone() {
+        } else if let Some(w) = self.cfg.profile().workspace.clone() {
             w
         } else if ui::interactive() {
             let (id, name) = self.pick_workspace()?;
             self.cfg.set_workspace(id.clone(), name);
-            self.cfg.save()?;
+            self.cfg.save_active()?;
             ui::hint("Saved as your default workspace. Change it with `fenders use`.");
             id
         } else {
@@ -167,16 +167,16 @@ impl App {
         }
         let ws = self.workspace()?;
         let flag_ws_differs =
-            self.ws_flag.is_some() && self.cfg.workspace.as_deref() != Some(ws.as_str());
+            self.ws_flag.is_some() && self.cfg.profile().workspace.as_deref() != Some(ws.as_str());
         let id = if let Some(f) = self.proj_flag.clone() {
             self.resolve_project(&ws, &f)?.0
-        } else if let (Some(p), false) = (self.cfg.project.clone(), flag_ws_differs) {
+        } else if let (Some(p), false) = (self.cfg.profile().project.clone(), flag_ws_differs) {
             p
         } else if ui::interactive() {
             let (id, name) = self.pick_project(&ws)?;
             if !flag_ws_differs {
                 self.cfg.set_project(id.clone(), name);
-                self.cfg.save()?;
+                self.cfg.save_active()?;
                 ui::hint("Saved as your default project. Change it with `fenders use`.");
             }
             id
@@ -205,20 +205,21 @@ impl App {
             Some(f) => Some({
                 let (id, name) = resolve_ws(f);
                 let name = name.or_else(|| {
-                    (self.cfg.workspace.as_deref() == Some(id.as_str()))
-                        .then(|| self.cfg.workspace_name.clone())
+                    (self.cfg.profile().workspace.as_deref() == Some(id.as_str()))
+                        .then(|| self.cfg.profile().workspace_name.clone())
                         .flatten()
                 });
                 (id, name, true)
             }),
             None => self
                 .cfg
+                .profile()
                 .workspace
                 .clone()
-                .map(|id| (id, self.cfg.workspace_name.clone(), false)),
+                .map(|id| (id, self.cfg.profile().workspace_name.clone(), false)),
         };
         // A saved project only applies to the saved workspace (as in `project()`).
-        let same_ws = ws.as_ref().map(|w| w.0.as_str()) == self.cfg.workspace.as_deref();
+        let same_ws = ws.as_ref().map(|w| w.0.as_str()) == self.cfg.profile().workspace.as_deref();
         let proj = match (&self.proj_flag, &ws) {
             (Some(f), Some((ws_id, _, _))) => Some(match self.resolve_project(ws_id, f) {
                 Ok((id, name)) => (
@@ -231,9 +232,10 @@ impl App {
             (Some(f), None) => Some((f.clone(), None, true)),
             (None, _) if same_ws => self
                 .cfg
+                .profile()
                 .project
                 .clone()
-                .map(|id| (id, self.cfg.project_name.clone(), false)),
+                .map(|id| (id, self.cfg.profile().project_name.clone(), false)),
             (None, _) => None,
         };
         (ws, proj)

@@ -1,6 +1,7 @@
-//! API key storage. `FENDERS_API_KEY` wins; otherwise the OS keychain on
-//! macOS/Windows, falling back to a 0600 credentials file (always used on Linux,
-//! which keeps the binary fully static).
+//! Credential storage, one per profile. `FENDERS_TOKEN` (or the older
+//! `FENDERS_API_KEY`) wins; otherwise the OS keychain on macOS/Windows,
+//! falling back to a 0600 credentials file (always used on Linux, which keeps
+//! the binary fully static).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -24,7 +25,7 @@ pub enum Source {
 impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Source::Env => "FENDERS_API_KEY environment variable",
+            Source::Env => "FENDERS_TOKEN environment variable",
             Source::Keychain => "system keychain",
             Source::File => "credentials file",
         })
@@ -64,29 +65,41 @@ fn write_file(map: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
-/// The key for `api_url`, and where it came from.
-pub fn token(api_url: &str) -> Option<(String, Source)> {
-    if let Ok(t) = std::env::var("FENDERS_API_KEY")
-        && !t.trim().is_empty()
-    {
-        return Some((t.trim().to_string(), Source::Env));
-    }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Ok(t) = keyring::Entry::new(SERVICE, api_url).and_then(|e| e.get_password()) {
-        return Some((t, Source::Keychain));
-    }
-    read_file().remove(api_url).map(|t| (t, Source::File))
+/// The variables that override a stored credential, in order.
+pub const ENV_VARS: [&str; 2] = ["FENDERS_TOKEN", "FENDERS_API_KEY"];
+
+/// The credential set in the environment, if any.
+pub fn env_token() -> Option<String> {
+    ENV_VARS.iter().find_map(|v| {
+        std::env::var(v)
+            .ok()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+    })
 }
 
-/// Store a key, preferring the keychain.
-pub fn store(api_url: &str, key: &str) -> Result<Source> {
+/// The credential for `profile` (none for an unsaved one), and where it came from.
+pub fn token(profile: Option<&str>) -> Option<(String, Source)> {
+    if let Some(t) = env_token() {
+        return Some((t, Source::Env));
+    }
+    let profile = profile?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Ok(t) = keyring::Entry::new(SERVICE, profile).and_then(|e| e.get_password()) {
+        return Some((t, Source::Keychain));
+    }
+    read_file().remove(profile).map(|t| (t, Source::File))
+}
+
+/// Store `profile`'s credential, preferring the keychain.
+pub fn store(profile: &str, key: &str) -> Result<Source> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        match keyring::Entry::new(SERVICE, api_url).and_then(|e| e.set_password(key)) {
+        match keyring::Entry::new(SERVICE, profile).and_then(|e| e.set_password(key)) {
             Ok(()) => {
                 // Don't leave a stale plaintext copy behind.
                 let mut m = read_file();
-                if m.remove(api_url).is_some() {
+                if m.remove(profile).is_some() {
                     write_file(&m)?;
                 }
                 return Ok(Source::Keychain);
@@ -98,20 +111,20 @@ pub fn store(api_url: &str, key: &str) -> Result<Source> {
         }
     }
     let mut m = read_file();
-    m.insert(api_url.to_string(), key.to_string());
+    m.insert(profile.to_string(), key.to_string());
     write_file(&m)?;
     Ok(Source::File)
 }
 
-/// Remove any stored key for `api_url`. Returns whether anything was removed.
-pub fn clear(api_url: &str) -> Result<bool> {
+/// Remove any stored credential for `profile`. Returns whether anything was removed.
+pub fn clear(profile: &str) -> Result<bool> {
     let mut removed = false;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Ok(e) = keyring::Entry::new(SERVICE, api_url) {
+    if let Ok(e) = keyring::Entry::new(SERVICE, profile) {
         removed |= e.delete_credential().is_ok();
     }
     let mut m = read_file();
-    if m.remove(api_url).is_some() {
+    if m.remove(profile).is_some() {
         write_file(&m)?;
         removed = true;
     }

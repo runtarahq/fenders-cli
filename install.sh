@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install, update or uninstall the fenders CLI on macOS and Linux.
 #
-#   curl -fsSL https://raw.githubusercontent.com/SyncMyOrders/fenders-cli/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/runtarahq/fenders-cli/main/install.sh | sh
 #
 # Options (or environment variables):
 #   --version vX.Y.Z   FENDERS_VERSION      install a specific release (default: latest)
@@ -15,7 +15,7 @@
 
 set -eu
 
-REPO="SyncMyOrders/fenders-cli"
+REPO="runtarahq/fenders-cli"
 BIN="fenders"
 RELEASES="${FENDERS_RELEASES_URL:-https://github.com/$REPO/releases}"
 # Refuse plain HTTP unless a mirror was explicitly configured.

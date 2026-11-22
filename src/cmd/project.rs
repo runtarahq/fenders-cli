@@ -14,13 +14,6 @@ use crate::client::seg;
 use crate::ui;
 
 #[derive(Subcommand, Debug)]
-pub enum WorkspacesCmd {
-    /// List workspaces this key can access
-    #[command(visible_alias = "ls")]
-    List,
-}
-
-#[derive(Subcommand, Debug)]
 pub enum ProjectsCmd {
     /// List projects in the current workspace
     #[command(visible_alias = "ls")]
@@ -161,22 +154,6 @@ pub enum OpsCmd {
     },
 }
 
-pub fn workspaces(app: &mut App, cmd: WorkspacesCmd) -> Result<()> {
-    match cmd {
-        WorkspacesCmd::List => {
-            let v = app.client.get("/workspaces", &[])?;
-            let items = mark_current(
-                crate::app::items_of(&v),
-                app.cfg.workspace.as_deref(),
-                app.out.json,
-            );
-            app.out
-                .list(&items, &["current", "id", "name", "role"], "workspaces");
-        }
-    }
-    Ok(())
-}
-
 /// Add a "●" column marking the selected item (table output only).
 fn mark_current(mut items: Vec<Value>, current: Option<&str>, json: bool) -> Vec<Value> {
     if json || current.is_none() {
@@ -196,7 +173,7 @@ pub fn projects(app: &mut App, cmd: ProjectsCmd) -> Result<()> {
         ProjectsCmd::List => {
             let p = format!("{}/projects", app.ws_path()?);
             let v = app.client.get(&p, &[])?;
-            let current = app.cfg.project.clone();
+            let current = app.cfg.profile().project.clone();
             let items = mark_current(crate::app::items_of(&v), current.as_deref(), app.out.json);
             app.out.list(&items, &["current", "id", "name"], "projects");
         }
@@ -209,11 +186,11 @@ pub fn projects(app: &mut App, cmd: ProjectsCmd) -> Result<()> {
             ui::success(&format!("Created project {name}"));
             if use_it && let Some(id) = id_of(&rec) {
                 let ws = app.workspace()?;
-                if app.cfg.workspace.as_deref() != Some(ws.as_str()) {
+                if app.cfg.profile().workspace.as_deref() != Some(ws.as_str()) {
                     app.cfg.set_workspace(ws, None);
                 }
                 app.cfg.set_project(id, name_of(&rec).or(Some(name)));
-                app.cfg.save()?;
+                app.cfg.save_active()?;
                 ui::success("Switched to it");
             }
             app.out.record(&rec);

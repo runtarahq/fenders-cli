@@ -1,4 +1,4 @@
-//! Thin blocking client for the Fenders customer API.
+//! Thin blocking client for the Fenders control plane's management API.
 //!
 //! Every response is an untyped `Record` in the spec, so we deal in
 //! `serde_json::Value`. Every mutation gets its own `Idempotency-Key`, reused
@@ -55,17 +55,26 @@ impl ApiError {
                 .any(|w| text.contains(w))
     }
 
-    /// A suggestion for what to do next.
+    /// A suggestion for what to do next. The control plane's `code` says
+    /// more than its status, so it is asked first.
     pub fn hint(&self) -> Option<String> {
-        Some(match self.status {
-            401 => "Your API key is missing, expired or revoked. Run `fenders auth login` or set FENDERS_API_KEY.".into(),
-            403 => "This API key lacks the permission (or project scope) for this action. Workspace owners manage keys in the console under Settings → API keys.".into(),
-            404 => "Check the ids involved — `fenders context` shows the current workspace and project.".into(),
-            409 | 412 if self.is_revision_conflict() => "The resource changed since it was read (revision mismatch). Re-run the command to use the latest revision.".into(),
-            409 => "The request conflicts with the resource's current state (see the message above).".into(),
-            413 => "The upload is too large. WASI components may be at most 16 MiB.".into(),
-            429 => "Rate limited. Wait a moment and try again.".into(),
-            s if s >= 500 => "The Fenders API had a problem. Retry shortly; include the request id if you contact support.".into(),
+        Some(match (self.status, self.code.as_str()) {
+            (_, "idempotency_key_reused") => "That Idempotency-Key was used for another request. Run the command again; it chooses a new key.".into(),
+            (_, "workspace_suspended") => "The workspace is suspended: reads still work, changes wait until the operator resumes it (`fenders tenants resume`).".into(),
+            (_, "quota_exhausted") => "An allowance or limit is reached; waiting will not help. The operator can raise it with `fenders tenants set`.".into(),
+            (_, "in_use") => "Something still refers to it. Change or remove that first, then try again.".into(),
+            (_, "not_validated") => "The artifact has not passed inspection yet. Check `fenders artifacts inspect`.".into(),
+            (_, "already_exists") => "It already exists — read the existing one instead.".into(),
+            (_, "busy") => "The control plane was busy. Run the same command again.".into(),
+            (401, _) => "The credential is missing, expired or revoked. Check `fenders profile show`, or set FENDERS_TOKEN.".into(),
+            (403, _) => "This credential may not do that. Operator actions need an operator profile (`fenders profile use …`); a tenant key needs the permission or project scope — the operator can issue one with `fenders keys issue`.".into(),
+            (404, _) => "Nothing by that id here — `fenders context` shows the current profile, workspace and project.".into(),
+            (409 | 412, _) if self.is_revision_conflict() => "The resource changed since it was read (revision mismatch). Re-run the command to use the latest revision.".into(),
+            (409, _) => "The request conflicts with the resource's current state (see the message above).".into(),
+            (413, _) => "The upload is too large. WASI components may be at most 16 MiB.".into(),
+            (415, _) => "The control plane takes JSON bodies (and application/wasm uploads).".into(),
+            (429, _) => "Rate limited. Wait a moment and try again.".into(),
+            (s, _) if s >= 500 => "The control plane had a problem. Retry shortly; its log has the request id below.".into(),
             _ => return None,
         })
     }
@@ -100,12 +109,34 @@ pub fn seg(s: &str) -> String {
 }
 
 impl Client {
+    #[cfg(test)]
     pub fn new(base: &str, token: Option<String>, verbose: bool) -> Result<Self> {
-        let http = reqwest::blocking::Client::builder()
+        Self::with_ca(base, token, None, verbose)
+    }
+
+    /// A client that also trusts the CA in `ca_pem`: the one `fenders-pki`
+    /// made, which signed the control plane's certificate.
+    pub fn with_ca(
+        base: &str,
+        token: Option<String>,
+        ca_pem: Option<&[u8]>,
+        verbose: bool,
+    ) -> Result<Self> {
+        let mut builder = reqwest::blocking::Client::builder()
             .user_agent(concat!("fenders-cli/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(300))
-            .build()?;
+            .timeout(Duration::from_secs(300));
+        if let Some(pem) = ca_pem {
+            let certs = reqwest::Certificate::from_pem_bundle(pem)
+                .map_err(|e| anyhow::anyhow!("the CA certificate is not PEM: {e}"))?;
+            if certs.is_empty() {
+                anyhow::bail!("the CA certificate file holds no certificate");
+            }
+            for c in certs {
+                builder = builder.add_root_certificate(c);
+            }
+        }
+        let http = builder.build()?;
         Ok(Self {
             http,
             base: base.trim_end_matches('/').to_string(),

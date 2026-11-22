@@ -20,8 +20,7 @@ use crate::cmd::apps::{
 use crate::cmd::deploy::DeployArgs;
 use crate::cmd::logs::LogsArgs;
 use crate::cmd::project::{
-    ArtifactsCmd, ConnectionsCmd, HttpsCmd, OpsCmd, ProjectsCmd, ScheduleCmd, SecretsCmd,
-    UsageArgs, WorkspacesCmd,
+    ArtifactsCmd, ConnectionsCmd, HttpsCmd, OpsCmd, ProjectsCmd, ScheduleCmd, SecretsCmd, UsageArgs,
 };
 use crate::cmd::session::{AuthCmd, UseArgs};
 use crate::output::Format;
@@ -47,11 +46,13 @@ fn styles() -> Styles {
 }
 
 const AFTER_HELP: &str = "\
-Get started:
-  fenders auth login                          Store your workspace API key
-  fenders use                                 Pick a workspace and project
-  fenders apps deploy app --artifact app.wasm Deploy a component; prints its URL
-  fenders logs app -f                         Follow its output
+Get started (as the operator of a control plane):
+  fenders profile add lab --url https://HOST:9090 --ca-cert ca.pem \\
+      --token-file STATE/operator.token       Connect with the operator token
+  fenders tenants create acme                 Create a tenant (a workspace)
+  fenders keys issue acme --save-profile acme Give it a key, saved as a profile
+  fenders -P acme deploy app.wasm --app hello Deploy a component as that tenant
+  fenders -P acme logs hello -f               Follow its output
 
 Docs: https://fenders.io";
 
@@ -91,7 +92,17 @@ struct Global {
         hide_env_values = true
     )]
     project: Option<String>,
-    /// API base URL
+    /// Profile to use for this command (see `fenders profile list`)
+    #[arg(
+        short = 'P',
+        long,
+        global = true,
+        env = "FENDERS_PROFILE",
+        hide_env_values = true,
+        value_name = "NAME"
+    )]
+    profile: Option<String>,
+    /// API base URL, instead of the profile's (stored credentials are not sent to it; use FENDERS_TOKEN)
     #[arg(
         long,
         global = true,
@@ -100,6 +111,15 @@ struct Global {
         value_name = "URL"
     )]
     api_url: Option<String>,
+    /// CA certificate (PEM) to trust, instead of the profile's
+    #[arg(
+        long,
+        global = true,
+        env = "FENDERS_CA_CERT",
+        hide_env_values = true,
+        value_name = "PEM"
+    )]
+    ca_cert: Option<std::path::PathBuf>,
     /// Output format
     #[arg(short = 'o', long, global = true, value_enum, default_value = "auto")]
     output: Format,
@@ -119,12 +139,15 @@ struct Global {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Log in, log out and inspect credentials
+    /// Manage profiles: control planes and the credentials for them
+    #[command(subcommand)]
+    Profile(cmd::profile::ProfileCmd),
+    /// Replace, remove or inspect the current profile's credential
     #[command(subcommand)]
     Auth(AuthCmd),
     /// Choose the workspace/project that commands apply to
     Use(UseArgs),
-    /// Show the current API URL, workspace, project and auth
+    /// Show the current profile, workspace, project and auth
     Context,
 
     /// Upload and deploy a WASI component in one step
@@ -152,9 +175,25 @@ enum Cmd {
     /// Show an app's events
     Events(EventsArgs),
 
-    /// List workspaces
+    /// [operator] Create, change, suspend and delete tenants (workspaces)
+    #[command(subcommand, visible_alias = "workspaces")]
+    Tenants(cmd::operator::TenantsCmd),
+    /// [operator] Issue, list and revoke tenants' API keys
     #[command(subcommand)]
-    Workspaces(WorkspacesCmd),
+    Keys(cmd::operator::KeysCmd),
+    /// [operator] Register, drain and remove nodes
+    #[command(subcommand)]
+    Nodes(cmd::operator::NodesCmd),
+    /// [operator] Register, drain and remove edges; show their routes
+    #[command(subcommand)]
+    Edges(cmd::operator::EdgesCmd),
+    /// [operator] Show or switch the public egress policy
+    #[command(subcommand, name = "egress-policy")]
+    EgressPolicy(cmd::operator::EgressCmd),
+    /// Whether the control plane is up, and its loops (the latter for the operator)
+    Status,
+    /// What was changed in a workspace, by whom
+    Audit(cmd::operator::AuditArgs),
     /// List and create projects
     #[command(subcommand)]
     Projects(ProjectsCmd),
@@ -259,22 +298,18 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     let g = cli.global;
-    let cfg = config::Config::load()?;
-    let api_url = g
-        .api_url
-        .clone()
-        .or_else(|| cfg.api_url.clone())
-        .unwrap_or_else(|| config::DEFAULT_API_URL.to_string())
-        .trim_end_matches('/')
-        .to_string();
-    let token = auth::token(&api_url).map(|(t, _)| t);
-    let client = client::Client::new(&api_url, token, g.verbose)?;
+    let mut cfg = config::Config::load()?;
     let format = if g.json { Format::Json } else { g.output };
+    if let Cmd::Profile(c) = command {
+        return cmd::profile::run(cfg, &output::Out::new(format), c, g.verbose);
+    }
+    cfg.activate(g.profile.as_deref())?;
+    let conn = cmd::profile::connect(&cfg, g.api_url.as_deref(), g.ca_cert.as_deref(), g.verbose)?;
     let mut app = app::App::new(
-        client,
+        conn.client,
         output::Out::new(format),
         cfg,
-        api_url,
+        conn.api_url,
         g.workspace,
         g.project,
     );
@@ -293,7 +328,13 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Runs(c) => apps::runs(&mut app, c),
         Cmd::Triggers(c) => apps::triggers(&mut app, c),
         Cmd::Events(a) => apps::events(&mut app, a),
-        Cmd::Workspaces(c) => project::workspaces(&mut app, c),
+        Cmd::Tenants(c) => operator::tenants(&mut app, c),
+        Cmd::Keys(c) => operator::keys(&mut app, c),
+        Cmd::Nodes(c) => operator::nodes(&mut app, c),
+        Cmd::Edges(c) => operator::edges(&mut app, c),
+        Cmd::EgressPolicy(c) => operator::egress(&mut app, c),
+        Cmd::Status => operator::status(&mut app),
+        Cmd::Audit(a) => operator::audit(&mut app, a),
         Cmd::Projects(c) => project::projects(&mut app, c),
         Cmd::Artifacts(c) => project::artifacts(&mut app, c),
         Cmd::Connections(c) => project::connections(&mut app, c),
@@ -304,7 +345,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::HttpsAccess(c) => project::https(&mut app, c),
         Cmd::Schedule(c) => project::schedule(&mut app, c),
         Cmd::Api(a) => api::run(&mut app, a),
-        Cmd::Completion { .. } | Cmd::Update(_) => unreachable!(),
+        Cmd::Completion { .. } | Cmd::Update(_) | Cmd::Profile(_) => unreachable!(),
     }
 }
 

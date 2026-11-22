@@ -2,6 +2,8 @@ pub mod api;
 pub mod apps;
 pub mod deploy;
 pub mod logs;
+pub mod operator;
+pub mod profile;
 pub mod project;
 pub mod session;
 pub mod update;

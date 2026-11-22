@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::ui::{self, To};
 
-const REPO: &str = "SyncMyOrders/fenders-cli";
+const REPO: &str = "runtarahq/fenders-cli";
 
 #[derive(Args, Debug)]
 pub struct UpdateArgs {

@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::app::{App, revision_of};
 use crate::client::{ApiError, Client};
-use crate::config::Config;
+use crate::config::{Config, Profile};
 use crate::output::Out;
 
 const WS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -26,8 +26,11 @@ fn client(server: &MockServer) -> Client {
 
 fn app(server: &MockServer) -> App {
     let cfg = Config {
-        workspace: Some(WS.into()),
-        project: Some(PJ.into()),
+        ephemeral: Profile {
+            workspace: Some(WS.into()),
+            project: Some(PJ.into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     App::new(
@@ -346,8 +349,11 @@ fn context_reflects_workspace_and_project_overrides() {
             .json_body(json!([{"id": other_pj, "name": "staging"}]));
     });
     let cfg = Config {
-        workspace: Some(WS.into()),
-        project: Some(PJ.into()),
+        ephemeral: Profile {
+            workspace: Some(WS.into()),
+            project: Some(PJ.into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mk = |ws: Option<&str>, pj: Option<&str>| {
