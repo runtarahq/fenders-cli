@@ -51,7 +51,7 @@ Get started (as the operator of a control plane):
       --token-file STATE/operator.token       Connect with the operator token
   fenders tenants create acme                 Create a tenant (a workspace)
   fenders keys issue acme --save-profile acme Give it a key, saved as a profile
-  fenders -P acme deploy app.wasm --app hello Deploy a component as that tenant
+  fenders -P acme deploy app.wasm --name hello Deploy a component as that tenant
   fenders -P acme logs hello -f               Follow its output
 
 Docs: https://fenders.io";

@@ -62,7 +62,7 @@ impl ApiError {
             (_, "idempotency_key_reused") => "That Idempotency-Key was used for another request. Run the command again; it chooses a new key.".into(),
             (_, "workspace_suspended") => "The workspace is suspended: reads still work, changes wait until the operator resumes it (`fenders tenants resume`).".into(),
             (_, "quota_exhausted") => "An allowance or limit is reached; waiting will not help. The operator can raise it with `fenders tenants set`.".into(),
-            (_, "in_use") => "Something still refers to it. Change or remove that first, then try again.".into(),
+            (_, "in_use") => "It is still in use or not ready to be removed — the message above says what to do first.".into(),
             (_, "not_validated") => "The artifact has not passed inspection yet. Check `fenders artifacts inspect`.".into(),
             (_, "already_exists") => "It already exists — read the existing one instead.".into(),
             (_, "busy") => "The control plane was busy. Run the same command again.".into(),

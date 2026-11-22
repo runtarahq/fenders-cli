@@ -67,7 +67,7 @@ pub struct DeployArgs {
 
 #[derive(Args, Debug)]
 pub struct AppsDeployArgs {
-    /// App name; an existing app gets a new release
+    /// App name. For an existing app it asks before releasing to it; without a terminal, use `fenders deploy FILE --app NAME`
     pub name: String,
     /// The component: a .wasm file, or an uploaded artifact's id
     #[arg(long, value_name = "FILE|ARTIFACT")]

@@ -312,8 +312,15 @@ pub fn apps(app: &mut App, cmd: AppsCmd) -> Result<()> {
         AppsCmd::Connections { app: a } => {
             let p = app.app_path(&a)?;
             let rec = app.client.get(&format!("{p}/connections"), &[])?;
-            app.out
-                .auto(&rec, &["connection_id", "prefix", "name"], "connections");
+            if app.out.json {
+                app.out.print_json(&rec);
+            } else {
+                app.out.list(
+                    &connection_rows(&rec),
+                    &["kind", "target", "state", "prefix", "id"],
+                    "connections",
+                );
+            }
         }
         AppsCmd::SetConnections {
             app: a,
@@ -469,6 +476,36 @@ fn lifecycle(
     };
     app.finish_op(op, &format!("{verb} {a}"), wait)?;
     Ok(())
+}
+
+/// One row per connection an app may use: its TCP endpoints (`items`) and
+/// its HTTPS origins (`https_origins`), which the API lists apart.
+fn connection_rows(rec: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for e in crate::app::items_of(rec) {
+        rows.push(json!({
+            "kind": "tcp",
+            "target": e.get("name").or(e.get("connection_id")).cloned().unwrap_or(Value::Null),
+            "state": e.get("state").cloned().unwrap_or(Value::Null),
+            "prefix": e.get("prefix").cloned().unwrap_or(Value::Null),
+            "id": e.get("connection_id").or(e.get("id")).cloned().unwrap_or(Value::Null),
+        }));
+    }
+    for o in rec
+        .get("https_origins")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        rows.push(json!({
+            "kind": "https",
+            "target": o.get("origin").cloned().unwrap_or(Value::Null),
+            "state": o.get("state").cloned().unwrap_or(Value::Null),
+            "prefix": Value::Null,
+            "id": o.get("id").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    rows
 }
 
 /// Revision from a sub-record (e.g. triggers), falling back to the app's.
@@ -757,4 +794,24 @@ pub fn summary(app: &mut App, app_id: &str, name: &str) -> Result<()> {
     ui::hint(&format!("Logs:   fenders logs {name} -f"));
     ui::hint(&format!("Run it: fenders run {name}"));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn connections_list_tcp_endpoints_and_https_origins() {
+        let rec = json!({
+            "items": [{"connection_id": "c1", "name": "db", "prefix": "DB", "state": "allowed"}],
+            "https_origins": [{"id": "h1", "origin": "https://api.github.com:443", "state": "allowed"}],
+            "revision": 5
+        });
+        let rows = super::connection_rows(&rec);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["kind"], "tcp");
+        assert_eq!(rows[0]["prefix"], "DB");
+        assert_eq!(rows[1]["kind"], "https");
+        assert_eq!(rows[1]["target"], "https://api.github.com:443");
+    }
 }
