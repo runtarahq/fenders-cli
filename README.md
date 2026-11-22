@@ -68,9 +68,9 @@ fenders -P acme audit                             # what was changed, and by whi
 | Operator | `tenants list \| get \| create \| set \| http-limits \| suspend \| resume \| delete`, `keys issue \| list \| revoke`, `nodes list \| get \| register \| set \| drain \| undrain \| disable \| enable \| delete`, `edges list \| register \| drain \| undrain \| delete \| routes`, `egress-policy get \| enable \| disable` |
 | Either | `status`, `audit [TENANT]` |
 | Ship | `deploy FILE.wasm`, `run APP`, `logs APP [-f]` |
-| Apps | `apps deploy \| list \| get \| create \| start [--release] \| stop \| url \| connections \| set-connections` |
-| App history | `versions …`, `releases …`, `runs …`, `events APP`, `triggers get \| set` |
-| Project | `projects list \| create`, `artifacts list \| get \| inspect \| upload`, `connections list \| get \| create https\|tcp \| revoke`, `secrets list \| get \| create`, `ops list \| get \| wait`, `usage`, `sizes`, `https-access show \| validate`, `schedule preview` |
+| Apps | `apps deploy \| list \| get \| create \| start [--release] \| stop \| delete \| url \| connections \| set-connections` |
+| App history | `versions …`, `releases …`, `runs list \| get \| create \| cancel`, `events APP`, `triggers get \| set` |
+| Project | `projects list \| create \| rename \| delete`, `artifacts list \| get \| inspect \| upload \| delete`, `connections list \| get \| create https\|tcp \| revoke`, `secrets list \| get \| create \| set \| delete`, `ops list \| get \| wait`, `usage`, `sizes`, `https-access show \| validate`, `schedule preview` |
 | Anything else | `api PATH [-X METHOD] [-d JSON\|@file]` with `{workspace}`/`{project}` placeholders |
 | Shell | `completion bash\|zsh\|fish\|powershell\|elvish`, `update [--check]` |
 

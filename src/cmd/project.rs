@@ -26,6 +26,21 @@ pub enum ProjectsCmd {
         #[arg(long = "use")]
         use_it: bool,
     },
+    /// Rename a project
+    Rename {
+        /// Project name or id
+        project: String,
+        /// Its new name (2–40 characters)
+        name: String,
+    },
+    /// Delete an empty project (not the default one)
+    #[command(visible_alias = "rm")]
+    Delete {
+        /// Project name or id
+        project: String,
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -74,6 +89,13 @@ pub enum ArtifactsCmd {
     Get { artifact: String },
     /// Show validation results and supported interfaces
     Inspect { artifact: String },
+    /// Delete an artifact that is no app's code
+    #[command(visible_alias = "rm")]
+    Delete {
+        artifact: String,
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Upload a WASI component (identical bytes reuse the existing artifact)
     Upload {
         #[arg(value_name = "FILE.wasm")]
@@ -130,6 +152,20 @@ pub enum SecretsCmd {
     List,
     /// Show a secret's metadata
     Get { secret: String },
+    /// Give a secret a new value; runs started after it use the new one
+    Set {
+        secret: String,
+        /// Read the value from a file instead
+        #[arg(long, value_name = "PATH")]
+        from_file: Option<PathBuf>,
+    },
+    /// Delete a secret no release, run or connection names
+    #[command(visible_alias = "rm")]
+    Delete {
+        secret: String,
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Create an encrypted secret; the value is read from stdin or a hidden prompt
     Create {
         name: String,
@@ -194,6 +230,36 @@ pub fn projects(app: &mut App, cmd: ProjectsCmd) -> Result<()> {
                 ui::success("Switched to it");
             }
             app.out.record(&rec);
+        }
+        ProjectsCmd::Rename { project, name } => {
+            if !(2..=40).contains(&name.chars().count()) {
+                bail!("project names must be 2–40 characters");
+            }
+            let ws = app.workspace()?;
+            let (id, _) = app.resolve_project(&ws, &project)?;
+            let p = format!("{}/projects/{}", app.ws_path()?, seg(&id));
+            let rec = app.client.patch(&p, json!({ "name": name }))?;
+            if app.cfg.profile().project.as_deref() == Some(id.as_str()) {
+                app.cfg.set_project(id, Some(name.clone()));
+                app.cfg.save_active()?;
+            }
+            ui::success(&format!("Renamed project {project} to {name}"));
+            app.out.record(&rec);
+        }
+        ProjectsCmd::Delete { project, yes } => {
+            let ws = app.workspace()?;
+            let (id, _) = app.resolve_project(&ws, &project)?;
+            confirm(&format!("Delete project {project}?"), yes)?;
+            let p = format!("{}/projects/{}", app.ws_path()?, seg(&id));
+            app.client.delete(&p)?;
+            if app.cfg.profile().project.as_deref() == Some(id.as_str()) {
+                let prof = app.cfg.profile_mut();
+                prof.project = None;
+                prof.project_name = None;
+                app.cfg.save_active()?;
+                ui::hint("It was your current project; pick another with `fenders use`.");
+            }
+            ui::success(&format!("Deleted project {project}"));
         }
     }
     Ok(())
@@ -304,6 +370,12 @@ pub fn artifacts(app: &mut App, cmd: ArtifactsCmd) -> Result<()> {
                 ui::warn(&problem);
             }
         }
+        ArtifactsCmd::Delete { artifact, yes } => {
+            let id = crate::cmd::artifact_ref(app, &artifact)?;
+            confirm(&format!("Delete artifact {artifact}?"), yes)?;
+            app.client.delete(&format!("{base}/{}", seg(&id)))?;
+            ui::success(&format!("Deleted artifact {artifact}"));
+        }
         ArtifactsCmd::Upload { file } => {
             let rec = upload_wasm(app, &file)?;
             app.out.record(&rec);
@@ -401,11 +473,8 @@ pub fn secrets(app: &mut App, cmd: SecretsCmd) -> Result<()> {
                     .to_string(),
                 None => read_secret(&format!("Value for {name}"), true)?,
             };
-            if value.is_empty() {
-                bail!("the secret value is empty");
-            }
-            if value.len() > 1024 {
-                bail!("secret values may be at most 1024 characters");
+            if !(4..=1024).contains(&value.len()) || value.contains('\0') {
+                bail!("a secret value is 4 to 1024 bytes, without NUL");
             }
             let rec = app
                 .client
@@ -415,6 +484,31 @@ pub fn secrets(app: &mut App, cmd: SecretsCmd) -> Result<()> {
             ui::hint(&format!(
                 "Use it with `--secret-env ENV_NAME={name}` on deploy or release"
             ));
+        }
+        SecretsCmd::Set { secret, from_file } => {
+            let id = app.resolve_in("secrets", &secret, "secret")?;
+            let value = match from_file {
+                Some(p) => std::fs::read_to_string(&p)?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
+                None => read_secret(&format!("New value for {secret}"), true)?,
+            };
+            if !(4..=1024).contains(&value.len()) || value.contains('\0') {
+                bail!("a secret value is 4 to 1024 bytes, without NUL");
+            }
+            let rec = app
+                .client
+                .put(&format!("{base}/{}", seg(&id)), json!({ "value": value }))?;
+            ui::success(&format!(
+                "Updated secret {secret}; runs started from now on use it"
+            ));
+            app.out.record(&rec);
+        }
+        SecretsCmd::Delete { secret, yes } => {
+            let id = app.resolve_in("secrets", &secret, "secret")?;
+            confirm(&format!("Delete secret {secret}?"), yes)?;
+            app.client.delete(&format!("{base}/{}", seg(&id)))?;
+            ui::success(&format!("Deleted secret {secret}"));
         }
     }
     Ok(())

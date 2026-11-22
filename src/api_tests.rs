@@ -520,6 +520,59 @@ mod starting_apps {
         .unwrap();
         release.assert();
     }
+
+    #[test]
+    fn delete_sends_the_apps_revision_in_the_query() {
+        let server = MockServer::start();
+        draft_app(&server);
+        ops_succeed(&server);
+        let del = server.mock(|when, then| {
+            when.method(DELETE)
+                .path(format!("{}/apps/{APP}", proj()))
+                .query_param("expected_revision", "1");
+            then.status(202).json_body(
+                json!({"id": OP, "kind": "delete", "resource_id": APP, "state": "pending"}),
+            );
+        });
+        let mut a = app(&server);
+        apps(
+            &mut a,
+            AppsCmd::Delete {
+                app: APP.into(),
+                expected_revision: None,
+                yes: true,
+                wait: wait(),
+            },
+        )
+        .unwrap();
+        del.assert();
+    }
+
+    #[test]
+    fn cancel_posts_to_the_runs_cancel_route_and_waits() {
+        use crate::cmd::apps::{RunsCmd, runs};
+        let server = MockServer::start();
+        ops_succeed(&server);
+        let run = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let cancel = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("{}/apps/{APP}/runs/{run}/cancel", proj()));
+            then.status(202).json_body(
+                json!({"id": OP, "kind": "cancel", "resource_id": run, "state": "pending"}),
+            );
+        });
+        let mut a = app(&server);
+        runs(
+            &mut a,
+            RunsCmd::Cancel {
+                app: APP.into(),
+                run: run.into(),
+                wait: wait(),
+            },
+        )
+        .unwrap();
+        cancel.assert();
+    }
 }
 
 #[test]

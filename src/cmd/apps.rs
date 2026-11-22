@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
-use super::{ConfigArgs, ListArgs, WaitArgs, artifact_ref};
+use super::{ConfigArgs, ListArgs, WaitArgs, artifact_ref, confirm};
 use crate::app::{App, compact, hinted, id_of};
 use crate::client::seg;
 use crate::ui::{self, To};
@@ -67,6 +67,17 @@ pub enum AppsCmd {
     },
     /// Show the app's HTTP address and status
     Url { app: String },
+    /// Delete an app, its versions, releases and runs' records
+    #[command(visible_alias = "rm")]
+    Delete {
+        app: String,
+        #[arg(long, value_name = "N")]
+        expected_revision: Option<i64>,
+        #[arg(short, long)]
+        yes: bool,
+        #[command(flatten)]
+        wait: WaitArgs,
+    },
     /// Show the external connections an app may use
     Connections { app: String },
     /// Replace the app's connections
@@ -163,6 +174,13 @@ pub enum RunsCmd {
     Get { app: String, run: String },
     /// Start a run (same as `fenders run`)
     Create(RunArgs),
+    /// Cancel a run that has not ended
+    Cancel {
+        app: String,
+        run: String,
+        #[command(flatten)]
+        wait: WaitArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -271,6 +289,18 @@ pub fn apps(app: &mut App, cmd: AppsCmd) -> Result<()> {
             expected_revision,
             wait,
         } => lifecycle(app, &a, "stopped", expected_revision, &wait)?,
+        AppsCmd::Delete {
+            app: a,
+            expected_revision,
+            yes,
+            wait,
+        } => {
+            let p = app.app_path(&a)?;
+            let rev = app.revision(&p, expected_revision)?;
+            confirm(&format!("Delete app {a}?"), yes)?;
+            let op = app.client.delete(&format!("{p}?expected_revision={rev}"))?;
+            app.finish_op(op, &format!("Delete {a}"), &wait)?;
+        }
         AppsCmd::Url { app: a } => {
             let p = app.app_path(&a)?;
             let rec = app.client.get(&format!("{p}/http"), &[])?;
@@ -620,6 +650,11 @@ pub fn runs(app: &mut App, cmd: RunsCmd) -> Result<()> {
             app.out.record(&rec);
         }
         RunsCmd::Create(args) => run(app, args)?,
+        RunsCmd::Cancel { app: a, run, wait } => {
+            let p = format!("{}/runs/{}/cancel", app.app_path(&a)?, seg(&run));
+            let op = app.client.post(&p, json!({}))?;
+            app.finish_op(op, &format!("Cancel run {run}"), &wait)?;
+        }
     }
     Ok(())
 }
