@@ -126,6 +126,12 @@ A `config.toml` from before profiles becomes a profile named `default`.
 ```sh
 cargo build --release          # → target/release/fenders (~4 MB, stripped, LTO)
 cargo test                     # unit tests + HTTP behaviour against a mock server
+
+# Against a real control plane (creates and then deletes a tenant of its own):
+FENDERS_E2E_URL=https://HOST:9090 FENDERS_E2E_CA=pki/ca.pem \
+FENDERS_E2E_TOKEN_FILE=STATE/operator.token \
+FENDERS_E2E_WASM=example-command.wasm \
+bash scripts/e2e_local.sh target/debug/fenders   # runs too, when a node is registered
 ```
 
 Release binaries are built natively per platform by `.github/workflows/release.yml` when a
