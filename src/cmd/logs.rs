@@ -37,10 +37,20 @@ pub struct LogsArgs {
     pub interval: u64,
 }
 
+// `bytes` is what the control plane's LogRecord carries; the rest are kept
+// for older or other servers.
 const TEXT_KEYS: &[&str] = &[
-    "output", "data", "content", "chunk", "message", "line", "text",
+    "bytes", "output", "data", "content", "chunk", "message", "line", "text",
 ];
-const TIME_KEYS: &[&str] = &["timestamp", "time", "ts", "created", "created_at", "at"];
+const TIME_KEYS: &[&str] = &[
+    "received",
+    "timestamp",
+    "time",
+    "ts",
+    "created",
+    "created_at",
+    "at",
+];
 
 /// Decode base64 output; fall back to the raw string.
 fn decode(s: &str) -> String {
@@ -67,7 +77,7 @@ pub fn text_of(rec: &Value) -> Option<String> {
     })
 }
 
-const B64_KEYS: &[&str] = &["output", "data", "content", "chunk"];
+const B64_KEYS: &[&str] = &["bytes", "output", "data", "content", "chunk"];
 
 fn time_of(rec: &Value) -> Option<String> {
     let raw = TIME_KEYS
@@ -251,6 +261,14 @@ fn stream(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn decodes_the_control_planes_log_records() {
+        let rec = json!({"bytes": "Y29tbWFuZCBjb21wbGV0ZQo=", "stream": "stdout",
+                         "received": "2026-11-22T09:57:34.609094+00:00"});
+        assert_eq!(text_of(&rec).as_deref(), Some("command complete\n"));
+        assert!(time_of(&rec).is_some());
+    }
 
     #[test]
     fn decodes_base64_output() {
